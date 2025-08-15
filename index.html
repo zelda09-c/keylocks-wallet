@@ -37,6 +37,10 @@
         cursor: pointer;
         font-weight: bold;
     }
+    button:disabled {
+        background: gray;
+        cursor: not-allowed;
+    }
     h1 {
         margin-bottom: 20px;
     }
@@ -63,6 +67,14 @@
         background: orange;
         font-size: 1.2em;
     }
+    .loading {
+        font-style: italic;
+        opacity: 0.8;
+    }
+    #status {
+        margin: 10px 0;
+        font-size: 0.9em;
+    }
 </style>
 </head>
 <body>
@@ -71,7 +83,8 @@
     <h1>KeyLocks Wallet</h1>
     <input type="text" id="pseudo" placeholder="Pseudo">
     <input type="password" id="password" placeholder="Mot de passe">
-    <button onclick="login()">Connexion / Créer</button>
+    <button id="loginBtn" onclick="login()">Connexion / Créer</button>
+    <div id="status"></div>
 </div>
 
 <div id="account" style="display:none;">
@@ -79,89 +92,240 @@
     <div id="pseudoDisplay"></div>
     <div>Solde : <span id="balance"></span> KL</div>
     <button id="transferBtn" onclick="transfer()">Transférer de l'argent</button>
+    <button onclick="logout()" style="background: #666; margin-top: 20px;">Déconnexion</button>
 </div>
 
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
 <script>
+    // Configuration Firebase
+    const firebaseConfig = {
+        apiKey: "AIzaSyB-nPZUa5PeT6VnDl0mPWOpCGzxrzyp7iM",
+        authDomain: "keylocks-wallet.firebaseapp.com",
+        projectId: "keylocks-wallet",
+        storageBucket: "keylocks-wallet.firebasestorage.app",
+        messagingSenderId: "171519417739",
+        appId: "1:171519417739:web:8aedce1b98d41e11eba38e",
+        measurementId: "G-5PNC6V20PG"
+    };
+
+    // Initialisation Firebase
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+
     let currentUser = null;
 
-    function loadData() {
-        return JSON.parse(localStorage.getItem("users") || "{}");
+    // Fonctions utilitaires
+    function setStatus(message, isError = false) {
+        const statusEl = document.getElementById("status");
+        statusEl.textContent = message;
+        statusEl.style.color = isError ? "#ff6666" : "#66ff66";
     }
 
-    function saveData(data) {
-        localStorage.setItem("users", JSON.stringify(data));
+    function setLoading(isLoading) {
+        const loginBtn = document.getElementById("loginBtn");
+        const transferBtn = document.getElementById("transferBtn");
+        
+        if (loginBtn) {
+            loginBtn.disabled = isLoading;
+            loginBtn.textContent = isLoading ? "Chargement..." : "Connexion / Créer";
+        }
+        if (transferBtn) {
+            transferBtn.disabled = isLoading;
+        }
     }
 
-    function login() {
-        let pseudo = document.getElementById("pseudo").value.trim();
-        let pass = document.getElementById("password").value.trim();
+    // Récupérer un utilisateur depuis Firestore
+    async function getUser(pseudo) {
+        try {
+            const doc = await db.collection("users").doc(pseudo).get();
+            return doc.exists ? doc.data() : null;
+        } catch (error) {
+            console.error("Erreur lors de la récupération:", error);
+            return null;
+        }
+    }
+
+    // Sauvegarder un utilisateur dans Firestore
+    async function saveUser(pseudo, userData) {
+        try {
+            await db.collection("users").doc(pseudo).set(userData);
+            return true;
+        } catch (error) {
+            console.error("Erreur lors de la sauvegarde:", error);
+            return false;
+        }
+    }
+
+    // Enregistrer une transaction
+    async function saveTransaction(from, to, amount) {
+        try {
+            await db.collection("transactions").add({
+                from: from,
+                to: to,
+                amount: amount,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                date: new Date().toISOString()
+            });
+        } catch (error) {
+            console.error("Erreur transaction:", error);
+        }
+    }
+
+    // Connexion/Création de compte
+    async function login() {
+        const pseudo = document.getElementById("pseudo").value.trim();
+        const pass = document.getElementById("password").value.trim();
+        
         if (!pseudo || !pass) {
-            alert("Veuillez remplir tous les champs");
+            setStatus("Veuillez remplir tous les champs", true);
             return;
         }
-        let users = loadData();
-        let now = Date.now();
 
-        if (!users[pseudo]) {
-            // Création
-            users[pseudo] = { password: pass, balance: 100, lastBonus: now };
-        } else {
-            if (users[pseudo].password !== pass) {
-                alert("Mot de passe incorrect !");
-                return;
+        setLoading(true);
+        setStatus("Connexion en cours...");
+
+        try {
+            const userData = await getUser(pseudo);
+            const now = Date.now();
+
+            if (!userData) {
+                // Création d'un nouveau compte
+                const newUser = {
+                    password: pass,
+                    balance: 100,
+                    lastBonus: now,
+                    createdAt: now
+                };
+                
+                const saved = await saveUser(pseudo, newUser);
+                if (saved) {
+                    setStatus("Compte créé avec succès !");
+                    currentUser = pseudo;
+                    setTimeout(() => showAccount(newUser), 1000);
+                } else {
+                    setStatus("Erreur lors de la création du compte", true);
+                }
+            } else {
+                // Connexion existante
+                if (userData.password !== pass) {
+                    setStatus("Mot de passe incorrect !", true);
+                    setLoading(false);
+                    return;
+                }
+
+                // Vérification du bonus hebdomadaire
+                const weeks = Math.floor((now - userData.lastBonus) / (7 * 24 * 60 * 60 * 1000));
+                if (weeks > 0) {
+                    userData.balance += weeks * 50;
+                    userData.lastBonus = now;
+                    await saveUser(pseudo, userData);
+                    setStatus(`Bonus de ${weeks * 50} KL ajouté !`);
+                } else {
+                    setStatus("Connexion réussie !");
+                }
+
+                currentUser = pseudo;
+                setTimeout(() => showAccount(userData), 1000);
             }
-            // Bonus hebdo
-            let weeks = Math.floor((now - users[pseudo].lastBonus) / (7 * 24 * 60 * 60 * 1000));
-            if (weeks > 0) {
-                users[pseudo].balance += weeks * 50;
-                users[pseudo].lastBonus = now;
-            }
+        } catch (error) {
+            setStatus("Erreur de connexion", true);
+            console.error("Erreur:", error);
         }
-        saveData(users);
-        currentUser = pseudo;
-        showAccount();
+
+        setLoading(false);
     }
 
-    function showAccount() {
-        let users = loadData();
+    // Afficher le compte
+    async function showAccount(userData = null) {
+        if (!userData) {
+            userData = await getUser(currentUser);
+        }
+        
         document.getElementById("login").style.display = "none";
         document.getElementById("account").style.display = "flex";
         document.getElementById("pseudoDisplay").textContent = currentUser;
-        document.getElementById("balance").textContent = users[currentUser].balance;
+        document.getElementById("balance").textContent = userData.balance;
     }
 
-    function transfer() {
-        let dest = prompt("Pseudo du destinataire :");
-        let amount = parseInt(prompt("Montant à transférer :"));
-        let pass = prompt("Votre mot de passe :");
+    // Transférer de l'argent
+    async function transfer() {
+        const dest = prompt("Pseudo du destinataire :");
+        const amount = parseInt(prompt("Montant à transférer :"));
+        const pass = prompt("Votre mot de passe :");
 
         if (!dest || isNaN(amount) || amount <= 0 || !pass) {
             alert("Données invalides");
             return;
         }
 
-        let users = loadData();
-        if (!users[dest]) {
-            alert("Destinataire introuvable !");
-            return;
-        }
-        if (users[currentUser].password !== pass) {
-            alert("Mot de passe incorrect !");
-            return;
-        }
-        if (users[currentUser].balance < amount) {
-            alert("Solde insuffisant !");
-            return;
+        setLoading(true);
+
+        try {
+            // Vérifier les données
+            const [senderData, destData] = await Promise.all([
+                getUser(currentUser),
+                getUser(dest)
+            ]);
+
+            if (!destData) {
+                alert("Destinataire introuvable !");
+                setLoading(false);
+                return;
+            }
+
+            if (senderData.password !== pass) {
+                alert("Mot de passe incorrect !");
+                setLoading(false);
+                return;
+            }
+
+            if (senderData.balance < amount) {
+                alert("Solde insuffisant !");
+                setLoading(false);
+                return;
+            }
+
+            // Effectuer le transfert
+            senderData.balance -= amount;
+            destData.balance += amount;
+
+            // Sauvegarder les modifications
+            await Promise.all([
+                saveUser(currentUser, senderData),
+                saveUser(dest, destData),
+                saveTransaction(currentUser, dest, amount)
+            ]);
+
+            alert(`Vous avez envoyé ${amount} KL à ${dest}`);
+            showAccount(senderData);
+
+        } catch (error) {
+            alert("Erreur lors du transfert");
+            console.error("Erreur:", error);
         }
 
-        // Transfert
-        users[currentUser].balance -= amount;
-        users[dest].balance += amount;
-        saveData(users);
-
-        alert(`Vous avez envoyé ${amount} KL à ${dest}`);
-        showAccount();
+        setLoading(false);
     }
+
+    // Déconnexion
+    function logout() {
+        currentUser = null;
+        document.getElementById("account").style.display = "none";
+        document.getElementById("login").style.display = "block";
+        document.getElementById("pseudo").value = "";
+        document.getElementById("password").value = "";
+        setStatus("");
+    }
+
+    // Gestion de l'entrée
+    document.addEventListener("keypress", function(e) {
+        if (e.key === "Enter" && document.getElementById("login").style.display !== "none") {
+            login();
+        }
+    });
 </script>
 
 </body>
