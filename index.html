@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>KeyLocks Wallet</title>
+<style>
+    body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: linear-gradient(to bottom right, #66ccff, #003366);
+        color: white;
+        height: 100vh;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    #login, #account {
+        background: rgba(0, 0, 0, 0.6);
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        width: 400px;
+    }
+    input {
+        padding: 10px;
+        margin: 10px;
+        border: none;
+        border-radius: 5px;
+        width: 80%;
+    }
+    button {
+        background: red;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        font-weight: bold;
+    }
+    h1 {
+        margin-bottom: 20px;
+    }
+    #account {
+        width: 80%;
+        height: 80%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        font-size: 1.5em;
+    }
+    #pseudoDisplay {
+        font-size: 2em;
+        font-weight: bold;
+        text-decoration: underline;
+    }
+    #balance {
+        font-size: 3em;
+        color: #00ffff;
+        font-weight: bold;
+    }
+    #transferBtn {
+        align-self: center;
+        background: orange;
+        font-size: 1.2em;
+    }
+</style>
+</head>
+<body>
+
+<div id="login">
+    <h1>KeyLocks Wallet</h1>
+    <input type="text" id="pseudo" placeholder="Pseudo">
+    <input type="password" id="password" placeholder="Mot de passe">
+    <button onclick="login()">Connexion / Créer</button>
+</div>
+
+<div id="account" style="display:none;">
+    <h1>Mon Compte</h1>
+    <div id="pseudoDisplay"></div>
+    <div>Solde : <span id="balance"></span> KL</div>
+    <button id="transferBtn" onclick="transfer()">Transférer de l'argent</button>
+</div>
+
+<script>
+    let currentUser = null;
+
+    function loadData() {
+        return JSON.parse(localStorage.getItem("users") || "{}");
+    }
+
+    function saveData(data) {
+        localStorage.setItem("users", JSON.stringify(data));
+    }
+
+    function login() {
+        let pseudo = document.getElementById("pseudo").value.trim();
+        let pass = document.getElementById("password").value.trim();
+        if (!pseudo || !pass) {
+            alert("Veuillez remplir tous les champs");
+            return;
+        }
+        let users = loadData();
+        let now = Date.now();
+
+        if (!users[pseudo]) {
+            // Création
+            users[pseudo] = { password: pass, balance: 100, lastBonus: now };
+        } else {
+            if (users[pseudo].password !== pass) {
+                alert("Mot de passe incorrect !");
+                return;
+            }
+            // Bonus hebdo
+            let weeks = Math.floor((now - users[pseudo].lastBonus) / (7 * 24 * 60 * 60 * 1000));
+            if (weeks > 0) {
+                users[pseudo].balance += weeks * 50;
+                users[pseudo].lastBonus = now;
+            }
+        }
+        saveData(users);
+        currentUser = pseudo;
+        showAccount();
+    }
+
+    function showAccount() {
+        let users = loadData();
+        document.getElementById("login").style.display = "none";
+        document.getElementById("account").style.display = "flex";
+        document.getElementById("pseudoDisplay").textContent = currentUser;
+        document.getElementById("balance").textContent = users[currentUser].balance;
+    }
+
+    function transfer() {
+        let dest = prompt("Pseudo du destinataire :");
+        let amount = parseInt(prompt("Montant à transférer :"));
+        let pass = prompt("Votre mot de passe :");
+
+        if (!dest || isNaN(amount) || amount <= 0 || !pass) {
+            alert("Données invalides");
+            return;
+        }
+
+        let users = loadData();
+        if (!users[dest]) {
+            alert("Destinataire introuvable !");
+            return;
+        }
+        if (users[currentUser].password !== pass) {
+            alert("Mot de passe incorrect !");
+            return;
+        }
+        if (users[currentUser].balance < amount) {
+            alert("Solde insuffisant !");
+            return;
+        }
+
+        // Transfert
+        users[currentUser].balance -= amount;
+        users[dest].balance += amount;
+        saveData(users);
+
+        alert(`Vous avez envoyé ${amount} KL à ${dest}`);
+        showAccount();
+    }
+</script>
+
+</body>
+</html>
